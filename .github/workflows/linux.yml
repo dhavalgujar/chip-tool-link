@@ -1,0 +1,127 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# chip-tool-link against the pinned connectedhomeip, its host tests, and on a
+# v* tag the release: chip-tool-link-<tag>-linux-x86_64.tgz with its sha256.
+name: Linux
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  # build.sh is tested at this commit; the image is the one CHIP's own CI
+  # uses there.
+  CHIP_SHA: 7d3dfb6c06b3cc696186f86d527b2f387a5603df
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-latest
+    container: ghcr.io/project-chip/chip-build:211
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: link
+          persist-credentials: false
+
+      # The checkout with its Linux submodules and bootstrapped environment
+      # (several GB): once per CHIP commit.
+      - name: Restore connectedhomeip
+        id: chip
+        uses: actions/cache@v4
+        with:
+          path: connectedhomeip
+          key: connectedhomeip-${{ env.CHIP_SHA }}-linux-1
+
+      - name: Check out and bootstrap connectedhomeip
+        if: steps.chip.outputs.cache-hit != 'true'
+        run: |
+          git config --global --add safe.directory '*'
+          git init -q connectedhomeip
+          cd connectedhomeip
+          git remote add origin https://github.com/project-chip/connectedhomeip.git
+          git fetch -q --depth 1 origin "$CHIP_SHA"
+          git checkout -q FETCH_HEAD
+          scripts/checkout_submodules.py --shallow --platform linux
+          scripts/bootstrap.sh -p all,linux
+
+      - name: Build
+        run: |
+          git config --global --add safe.directory '*'
+          link/build.sh connectedhomeip "$PWD/out"
+
+      - name: Host tests
+        run: CHIP_TOOL_LINK=$PWD/out/chip-tool-link python3 -m unittest discover -s link/tests -p 'test_cli.py' -v
+
+      - name: Package
+        run: |
+          name=${GITHUB_REF_NAME//\//-}
+          [[ $GITHUB_REF == refs/tags/v* ]] || name=$(git -C link rev-parse --short HEAD)
+          base=chip-tool-link-$name
+          mkdir -p "pkg/$base/bin" dist
+          strip -o "pkg/$base/bin/chip-tool-link" out/chip-tool-link
+          cp link/README.md link/LICENSE "pkg/$base/"
+          tar -C pkg --owner=0 --group=0 --numeric-owner -czf "dist/$base-linux-x86_64.tgz" "$base"
+          (cd dist && sha256sum "$base-linux-x86_64.tgz" > "$base-linux-x86_64.tgz.sha256" && cat ./*.sha256)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chip-tool-link
+          path: dist
+          retention-days: 14
+
+  # The packaged binary on a stock image, with no CHIP environment.
+  check:
+    name: Packaged binary
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: chip-tool-link
+          path: dist
+
+      - name: Host tests
+        run: |
+          (cd dist && sha256sum -c ./*.sha256)
+          tar -C dist -xzf dist/chip-tool-link-*-linux-x86_64.tgz
+          CHIP_TOOL_LINK=$(ls "$PWD"/dist/chip-tool-link-*/bin/chip-tool-link) \
+            python3 -m unittest discover -s tests -p 'test_cli.py' -v
+
+  release:
+    name: Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: chip-tool-link
+          path: dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
+            --notes "chip-tool-link for Linux x86-64, built against connectedhomeip $CHIP_SHA. Check the download with its .sha256." \
+            dist/chip-tool-link-*-linux-x86_64.tgz dist/chip-tool-link-*-linux-x86_64.tgz.sha256
