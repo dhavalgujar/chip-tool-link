@@ -56,7 +56,8 @@ jobs:
           git fetch -q --depth 1 origin "$CHIP_SHA"
           git checkout -q FETCH_HEAD
           scripts/checkout_submodules.py --shallow --platform linux
-          scripts/bootstrap.sh -p all,linux
+          # Sourced, as in CHIP's own CI (.github/actions/bootstrap)
+          source scripts/bootstrap.sh -p all,linux
 
       - name: Build
         run: |
