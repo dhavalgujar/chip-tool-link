@@ -1,0 +1,4 @@
+build_overrides
+third_party/
+out*/
+__pycache__/

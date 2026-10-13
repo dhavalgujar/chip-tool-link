@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# chip-tool-link: chip-tool's cluster commands, compiled unmodified from a
+# connectedhomeip checkout, that print the gadget's matter.* call instead of
+# sending anything, and print the gadget's answer the way chip-tool does.
+# The symlinks (build_overrides, third_party/connectedhomeip) are made by
+# build.sh.
+
+import("//build_overrides/build.gni")
+import("//build_overrides/chip.gni")
+
+chip_tool_dir = "${chip_root}/examples/chip-tool"
+
+config("chip_tool_link_config") {
+  # shim/ first: its InteractionModel.h replaces CHIP's, under the same name.
+  include_dirs = [
+    "shim",
+    "src",
+    chip_tool_dir,
+    "${chip_root}/examples/common",
+    "${chip_root}/zzz_generated/app-common/app-common",
+    "${chip_root}/zzz_generated/chip-tool",
+    "${chip_root}/src/lib",
+  ]
+
+  # chip-tool's own settings, less its storage, event loop and interactive mode.
+  defines = [
+    "CONFIG_USE_SEPARATE_EVENTLOOP=0",
+    "CONFIG_USE_INTERACTIVE_MODE=0",
+  ]
+}
+
+executable("chip-tool-link") {
+  sources = [
+    # chip-tool, unmodified.
+    "${chip_root}/zzz_generated/chip-tool/zap-generated/cluster/ComplexArgumentParser.cpp",
+    "${chip_root}/zzz_generated/chip-tool/zap-generated/cluster/logging/DataModelLogger.cpp",
+    "${chip_root}/zzz_generated/chip-tool/zap-generated/cluster/logging/EntryToText.cpp",
+    "${chip_tool_dir}/commands/common/Command.cpp",
+    "${chip_tool_dir}/commands/common/Commands.cpp",
+    "${chip_tool_dir}/commands/common/RemoteDataModelLogger.cpp",
+
+    # Ours: the parts that would connect, send or start the stack.
+    "src/CHIPCommand.cpp",
+    "src/InteractionModel.cpp",
+    "src/Link.cpp",
+    "src/ModelCommand.cpp",
+    "src/Stubs.cpp",
+    "src/main.cpp",
+  ]
+
+  configs += [ ":chip_tool_link_config" ]
+
+  deps = [
+    "${chip_root}/examples/common/tracing:commandline",
+    "${chip_root}/src/app",
+    "${chip_root}/src/app/common:cluster-objects",
+    "${chip_root}/src/lib",
+    "${chip_root}/src/lib/core:types",
+    "${chip_root}/src/lib/support/jsontlv",
+    "${chip_root}/src/platform",
+    "${chip_root}/src/platform/logging:stdio",
+    "${chip_root}/third_party/jsoncpp",
+  ]
+
+  output_dir = root_out_dir
+}
+
+group("default") {
+  deps = [ ":chip-tool-link" ]
+}
